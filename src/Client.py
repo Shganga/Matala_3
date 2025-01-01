@@ -54,29 +54,6 @@ def request_max_message_size(client_socket : socket, input_file=None):
 
     return response #returns the size (in bytes) that the server can handle
 
-# Send a window of chunks and wait for acknowledgment
-def send_window(window_index, window, client_socket, window_size):
-    print(f"Sending window {window_index + 1}...")
-
-    # Send each chunk in the window with a sequence number
-    for chunk_index, chunk in enumerate(window):
-        sequence_number = window_index * window_size + chunk_index  # Sequence number for each chunk
-        message = f"M{sequence_number}: {chunk}"  # Label the chunk with sequence number
-        client_socket.send(message.encode())  # Send chunk over the socket
-        print(f"Sent chunk {message}")
-
-    # Wait for acknowledgment of the entire window (with timeout)
-    try:
-        ack = client_socket.recv(1024).decode()  # Receive acknowledgment (with timeout)
-        if ack == "ACK":
-            print(f"Window {window_index + 1} sent successfully.")
-        else:
-            print(f"Unexpected response for window {window_index + 1}: {ack}")
-    except socket.timeout:
-        print(f"Timeout waiting for acknowledgment for window {window_index + 1}. Retrying...")
-        return False  # Indicating timeout occurred
-    return True
-
 
 # Main client function to send the message with sliding window
 def client_send_message(client_socket: socket, max_size: int):
@@ -112,21 +89,48 @@ def client_send_message(client_socket: socket, max_size: int):
                 window_size = int(data.get('window_size'))
                 timeout = int(data.get('timeout'))
 
-                # Set timeout for the socket
-                client_socket.settimeout(timeout)
-
                 # Split the message into chunks based on max_size
                 chunks = [message[i:i + max_size] for i in range(0, len(message), max_size)]
 
-                # Split the chunks into windows based on window size
-                windows = [chunks[i:i + window_size] for i in range(0, len(chunks), window_size)]
+                ack_status = [False] * len(chunks)
 
-                # Send the windows with the sliding window protocol
-                for window_index, window in enumerate(windows):
-                    success = send_window(window_index, window, client_socket, window_size)
-                    if not success:
-                        print(f"Failed to send window {window_index + 1}. Retrying...")
-                        # You can add retry logic here if needed
+                current_window_start = 0
+
+                # Set socket timeout
+                client_socket.settimeout(timeout)
+
+                # Continue sending chunks until all are acknowledged
+                while not all(ack_status):
+                    current_window_end = min(current_window_start + window_size, len(chunks))
+                    current_window = chunks[current_window_start:current_window_end]
+
+                    # Send chunks in the current window
+                    for chunk_index in range(len(current_window)):
+                        sequence_number = current_window_start + chunk_index
+                        message = f"M{sequence_number}: {current_window[chunk_index]}"
+                        client_socket.send(message.encode())
+                        print(f"Sent chunk: {message}")
+
+                    # Wait for acknowledgment
+                    try:
+                        ack = client_socket.recv(1024).decode()
+                        if ack.startswith("ACK:"):
+                            ack_sequence = int(ack.split(":")[1])  # Parse acknowledgment sequence
+                            if 0 <= ack_sequence < len(ack_status):
+                                ack_status[ack_sequence] = True  # Mark chunk as acknowledged
+                                print(f"Received acknowledgment for chunk {ack_sequence}")
+
+                                # Move the window forward
+                                while (
+                                        current_window_start < len(ack_status)
+                                        and ack_status[current_window_start]
+                                ):
+                                    current_window_start += 1
+                        else:
+                            print(f"Unexpected acknowledgment format: {ack}")
+                    except socket.timeout:
+                        print(f"Timeout waiting for acknowledgment. Retrying window...")
+
             else:
                 # If the message fits within the max_size, just send it directly
                 client_socket.send(message.encode())
