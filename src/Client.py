@@ -1,4 +1,5 @@
 import socket
+import sys
 import time
 
 # Utility function to read input data from a file
@@ -19,7 +20,7 @@ def read_input_file(file_path):
             if not data:
                 print(f"Warning: The file {file_path} is empty or malformed.")
                 return None  # Return None if no data was parsed
-            return data
+            return data.get('message'), int(data.get('maximum_msg_size')), int(data.get('timeout'))
     except FileNotFoundError:
         print(f"Error: The file at {file_path} was not found.")
     except PermissionError:
@@ -32,109 +33,127 @@ def read_input_file(file_path):
 
 
 
+def chunk_maker(message, max_message_size):
+    chunks = []
+    msg_bytes = message.encode()
+    chunk_index = 0
+    message_number = 0
 
-def request_max_message_size(client_socket : socket, input_file=None):
-    # Determine input source: user or file
-    if input_file:
-        # Read the maximum message size from the file
-        data = read_input_file(input_file)
-        request = data.get('message')
-        print(f"Input from file: {data}")
-    else:
-        # Get user input
-        request = "max_message_size"
+    while chunk_index < len(msg_bytes):
+        chunk_number = f"M{message_number}:"
+        remaining_message = msg_bytes[chunk_index:]
+        second_part_of_message = remaining_message[:max_message_size]
 
-    # Send the request to the server
-    client_socket.send(request.encode())
-    print(f"Request sent: {request}")
+        while True:
+            try:
+                second_part_of_message_decoded = second_part_of_message.decode()
+                break
+            except UnicodeDecodeError:
+                second_part_of_message = second_part_of_message[:-1]
 
-    # Receive the server's response
-    response = client_socket.recv(1024).decode()  # Buffer size of 1024 bytes
-    print(f"Response from server: {response}")
+        chunk = f"{chunk_number}{second_part_of_message_decoded}"
+        chunks.append(chunk)
 
-    return response #returns the size (in bytes) that the server can handle
+        chunk_index += len(second_part_of_message)
+        message_number += 1
+
+    print(chunks)
+
+    return chunks
+
+
+def send_chunks(chunks, window_size, timeout, client_socket):
+
+    ack_received = [False] * len(chunks)  # Initialize ACK received list
+    base = 0  # Base of the sliding window
+    next_seq_num = 0  # Next sequence number to be sent
+
+    # Set socket timeout for receiving ACKs
+    client_socket.settimeout(timeout)
+
+    while base < len(chunks):
+        # Send all chunks within the window
+        while next_seq_num < base + window_size and next_seq_num < len(chunks):
+            try:
+                print(chunks[next_seq_num])
+                client_socket.sendall(chunks[next_seq_num].encode())  # Send the chunk
+                print(f"Sent chunk: {next_seq_num}")
+                next_seq_num += 1
+            except socket.error as e:
+                print(f"Error sending chunk {next_seq_num}: {e}")
+                return
+        # Start timer for the base chunk
+        start_time = time.time()
+
+        while True:
+            try:
+                ack_str = client_socket.recv(1024).decode().strip()
+                ack_num = int(ack_str.split(':')[-1])  # Extract number from ACK string
+                ack_received[ack_num] = True  # Mark ACK as received
+
+                # Slide window if the base is acknowledged
+                while base < len(chunks) and ack_received[base]:
+                    base += 1
+
+                if base == len(chunks):
+                    break  # Transmission complete
+
+            except socket.timeout:
+                # Resend all chunks in the window if timeout
+                if time.time() - start_time > timeout:
+                    next_seq_num = base
+                    break
+            except ValueError:
+                print(f"Invalid ACK received: {ack_str}")  # Handle invalid ACK format
+
 
 
 # Main client function to send the message with sliding window
-def client_send_message(client_socket: socket, max_size: int):
+def client(client_socket: socket):
+
+    while True:
+        data = input("Do you want to send a file to set the server settings? (yes/no)")
+        if data == 'no':
+            client_socket.send("no".encode())
+            client_socket.send(input("What is the maximum message size? ").encode())
+            max_size = int(client_socket.recv(1024).decode().strip())
+            window_size = int(input("What is the the window size?"))
+            timeout = int(input("What is the timeout?"))
+            break
+
+        elif data == 'yes':
+            client_socket.send("file".encode())
+            input_file = input("Enter the file path: ")
+            client_socket.send(input_file.encode())
+            max_size = int(client_socket.recv(1024).decode().strip())
+            message, window_size, timeout = read_input_file(input_file)
+            break
+        else:
+            print("invalid input")
+
+
     while True:
         # asking if the client wants to send a file or text
-        input_file = input("Do you want to send a file (yes/no) to logout ent 0: ")
+
+        input_file = input("Do you want to continue? (yes/no): ")
+        if input_file == 'no':
+            client_socket.send("no".encode())
+            break
+
+        input_file = input("Do you want to send a file? (yes/no): ")
+
         if input_file == "yes":
             input_file = input("Enter file path: ")
 
-            data = read_input_file(input_file)
-
-            if data is None:
+            message = read_input_file(input_file)[0]
+            if message is None:
                 print("Error: The file could not be read or is empty. Exiting...")
                 return  # Exit or handle error if data is None
 
-            message = data.get('message')
-            if message is None:
-                print("Error: 'message' field is missing in the input file.")
-                return  # Exit or handle error if 'message' is missing in the file
 
-            # Safely get 'maximum_msg_size', default to 0 if missing or None
-            maximum_msg_size = data.get('maximum_msg_size')
+            chunks = chunk_maker(message, max_size)
 
-            if maximum_msg_size is None:
-                print("Error: 'maximum_msg_size' is missing in the file. Exiting...")
-                break  # Exit or handle the error appropriately
-            else:
-                maximum_msg_size = int(maximum_msg_size)  # Convert to int
-
-            # If the message is bigger than the max size allowed by the server
-            if maximum_msg_size > max_size:
-                # Get window size and timeout from input file
-                window_size = int(data.get('window_size'))
-                timeout = int(data.get('timeout'))
-
-                # Split the message into chunks based on max_size
-                chunks = [message[i:i + max_size] for i in range(0, len(message), max_size)]
-
-                ack_status = [False] * len(chunks)
-
-                current_window_start = 0
-
-                # Set socket timeout
-                client_socket.settimeout(timeout)
-
-                # Continue sending chunks until all are acknowledged
-                while not all(ack_status):
-                    current_window_end = min(current_window_start + window_size, len(chunks))
-                    current_window = chunks[current_window_start:current_window_end]
-
-                    # Send chunks in the current window
-                    for chunk_index in range(len(current_window)):
-                        sequence_number = current_window_start + chunk_index
-                        message = f"M{sequence_number}: {current_window[chunk_index]}"
-                        client_socket.send(message.encode())
-                        print(f"Sent chunk: {message}")
-
-                    # Wait for acknowledgment
-                    try:
-                        ack = client_socket.recv(1024).decode()
-                        if ack.startswith("ACK:"):
-                            ack_sequence = int(ack.split(":")[1])  # Parse acknowledgment sequence
-                            if 0 <= ack_sequence < len(ack_status):
-                                ack_status[ack_sequence] = True  # Mark chunk as acknowledged
-                                print(f"Received acknowledgment for chunk {ack_sequence}")
-
-                                # Move the window forward
-                                while (
-                                        current_window_start < len(ack_status)
-                                        and ack_status[current_window_start]
-                                ):
-                                    current_window_start += 1
-                        else:
-                            print(f"Unexpected acknowledgment format: {ack}")
-                    except socket.timeout:
-                        print(f"Timeout waiting for acknowledgment. Retrying window...")
-
-            else:
-                # If the message fits within the max_size, just send it directly
-                client_socket.send(message.encode())
-                print(f"Sent message: {message}")
+            send_chunks(chunks, window_size, timeout, client_socket)
 
         elif input_file == "no":
             # Get user input if no input file
@@ -144,9 +163,6 @@ def client_send_message(client_socket: socket, max_size: int):
             client_socket.send(request.encode())
             print(f"Request sent: {request}")
 
-        #stops the loop and gets out of function
-        elif input_file == "0":
-            break
         else:
             print("incorrect input")
 
@@ -157,11 +173,7 @@ if __name__ == "__main__":
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.connect(('127.0.0.1', 12345))  # Connect to the server (localhost, port 12345)
 
-    # Assume maximum message size specified by server is 20 bytes
-    max_size = int(request_max_message_size(client_socket))
-
-
-    client_send_message(client_socket, max_size)
+    client(client_socket)
 
     # Start sending the message from the client to the server
 
