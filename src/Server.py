@@ -13,6 +13,7 @@ def start_server():
     client_socket, client_address = server_socket.accept()  # Accept a client connection
     print(f"Connection established with {client_address}")
 
+    #this sets the server settings from the client
     message = client_socket.recv(1024).decode()
     if message == "file":
         message = client_socket.recv(1024).decode()
@@ -22,6 +23,7 @@ def start_server():
 
     client_socket.send(max_message_size.encode())
 
+    #after the server setup it can start getting messages
     server_recive(client_socket, int(max_message_size))
 
     client_socket.close()  # Close the connection
