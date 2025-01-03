@@ -60,36 +60,38 @@ def server_recive(client_socket : socket,max_message_size):
     while True:
         try:
             # Receive message from the client
-            message = client_socket.recv(1024).decode()
+            message = client_socket.recv(max_message_size + 10).decode()  # Buffer size adjusted for headers
 
             if not message:
-                # Connection might have been closed
                 print("Client disconnected.")
                 break
-            if message == "End":
-                break
-            else:
-                message = client_socket.recv(max_message_size + MAX_HEADER_SIZE).decode()
-                print(message)
-                # Parse the sequence number and chunk from the message
-                if message.startswith("M"):
-                    parts = message.split(":")
-                    if len(parts) == 2:
-                        sequence_number = int(parts[0][1:])  # Extract sequence number
-                        chunk = parts[1]  # Extract chunk data
 
-                        # Store the chunk by sequence number
+            if message == "End":
+                print("End of transmission received.")
+                break
+
+            # Parse the sequence number and chunk from the message
+            if message.startswith("M"):
+                parts = message.split(":")
+                if len(parts) == 2:
+                    sequence_number = int(parts[0][1:])  # Extract sequence number (e.g., "M1")
+                    chunk = parts[1]  # Extract chunk data
+
+                    # Store the chunk by sequence number
+                    if sequence_number not in received_data:  # Avoid overwriting
                         received_data[sequence_number] = chunk
                         print(f"Received chunk {sequence_number}: {chunk}")
 
                         # Send acknowledgment for the chunk
-                        ack_message = f"ACK:{sequence_number}"
-                        client_socket.send(ack_message.encode())
+                        ack_message = f"ACK{sequence_number}"
+                        client_socket.sendall(ack_message.encode())
                         print(f"Sent acknowledgment: {ack_message}")
                     else:
-                        print(f"Invalid message format: {message}")
+                        print(f"Duplicate chunk {sequence_number} ignored.")
                 else:
-                    print(f"Unexpected message: {message}")
+                    print(f"Invalid message format: {message}")
+            else:
+                print(f"Unexpected message: {message}")
 
         except socket.timeout:
             print("Timeout waiting for data.")
