@@ -21,12 +21,15 @@ def start_server():
     else:
         max_message_size = client_socket.recv(1024).decode()
 
-    client_socket.send(max_message_size.encode())
+    client_socket.sendall(max_message_size.encode())
 
-    #after the server setup it can start getting messages
-    server_recive(client_socket, int(max_message_size))
+    while message != "End":
+        server_recive(client_socket, int(max_message_size))
 
-    client_socket.close()  # Close the connection
+        message = client_socket.recv(1024).decode()
+
+    client_socket.close()
+
 
 # Utility function to read input data from a file
 def read_input_file(file_path):
@@ -56,7 +59,9 @@ def read_input_file(file_path):
 
 def server_recive(client_socket : socket,max_message_size):
     received_data = {}  # Dictionary to store received chunks by sequence number
-
+    acks = []
+    needed_ack = 0
+    skip_ack = 0
     while True:
         try:
             # Receive message from the client
@@ -66,8 +71,8 @@ def server_recive(client_socket : socket,max_message_size):
                 print("Client disconnected.")
                 break
 
-            if message == "End":
-                print("End of transmission received.")
+            if message == "done":
+                print("End of message")
                 break
 
             # Parse the sequence number and chunk from the message
@@ -77,21 +82,29 @@ def server_recive(client_socket : socket,max_message_size):
                     sequence_number = int(parts[0][1:])  # Extract sequence number (e.g., "M1")
                     chunk = parts[1]  # Extract chunk data
 
+                    print(f"Received chunk {sequence_number}: {chunk}")
                     # Store the chunk by sequence number
                     if sequence_number not in received_data:  # Avoid overwriting
                         received_data[sequence_number] = chunk
-                        print(f"Received chunk {sequence_number}: {chunk}")
+                        acks.extend([False] * (sequence_number - len(acks) + 1))
 
-                        # Send acknowledgment for the chunk
-                        ack_message = f"ACK{sequence_number}"
+
+                    if sequence_number  == needed_ack:
+                        #needed_ack += 1
+
+                        print(f"Sent acknowledgment: {needed_ack}")
+                        ack_message = f"ACK{needed_ack}"
                         client_socket.sendall(ack_message.encode())
-                        print(f"Sent acknowledgment: {ack_message}")
-                    else:
-                        print(f"Duplicate chunk {sequence_number} ignored.")
+                        acks[needed_ack] = True
+
+                        while needed_ack < len(received_data) and acks[needed_ack] is not False:
+                            needed_ack += 1
                 else:
                     print(f"Invalid message format: {message}")
             else:
                 print(f"Unexpected message: {message}")
+
+
 
         except socket.timeout:
             print("Timeout waiting for data.")
@@ -100,9 +113,9 @@ def server_recive(client_socket : socket,max_message_size):
             print(f"Error occurred: {e}")
             break
 
-    # Optionally, reconstruct the full message from received chunks
     complete_message = "".join(received_data[i] for i in sorted(received_data.keys()))
     print(f"Complete message received: {complete_message}")
+
 
 
 if __name__ == "__main__":

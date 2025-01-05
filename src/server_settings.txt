@@ -1,0 +1,4 @@
+message:”server settings”
+maximum_msg_size:10
+window_size:4
+timeout:5
