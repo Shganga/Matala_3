@@ -110,7 +110,7 @@ def send_chunks(chunks,window_size, timeout, client_socket):
 
 
 
-def ack_handler(client_socket):
+def ack_get_and_send(client_socket):
     try:
         client_socket.settimeout(1)
         ack = client_socket.recv(1024).decode()
