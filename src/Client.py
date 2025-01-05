@@ -98,7 +98,7 @@ def send_chunks(chunks,window_size, timeout, client_socket):
                 print(chunks[i])
                 client_socket.sendall(chunks[i].encode())
 
-                current_ack = ack_handler(client_socket)
+                current_ack = ack_get_and_send(client_socket)
                 if current_ack is not None and current_ack < len(chunks):
                     for ack in range(current_ack + 1):
                         ack_received[ack] = True
