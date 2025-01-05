@@ -90,7 +90,6 @@ def server_recive(client_socket : socket,max_message_size):
 
 
                     if sequence_number  == needed_ack:
-                        #needed_ack += 1
 
                         print(f"Sent acknowledgment: {needed_ack}")
                         ack_message = f"ACK{needed_ack}"
